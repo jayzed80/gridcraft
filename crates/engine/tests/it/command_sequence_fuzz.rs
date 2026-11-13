@@ -1109,6 +1109,85 @@ fn hint_value(rng: &mut Rng, wb: &Workbook, hint: &str) -> Json {
 }
 
 #[test]
+#[ignore]
+fn tmp_issue_3865_probe() {
+    let seq: Vec<Step> = vec![
+        ("cell.set".into(), json!({"cell":"H13","input":"5%"})),
+        ("home.insertRows".into(), json!({"rows":"14:16"})),
+        ("home.insertColumns".into(), json!({"cols":"L:M"})),
+        ("home.deleteRows".into(), json!({"rows":"9:9"})),
+        ("edit.fillSeries".into(), json!({"range":"I4:I11","step":1,"type":"growth"})),
+        ("table.totalRow".into(), json!({"on":false,"table":"Sales"})),
+        ("data.removeDuplicates".into(), json!({"header":false,"range":"I8:K13"})),
+        ("view.freezeTopRow".into(), json!({"sheet":0})),
+        ("home.insertRows".into(), json!({"rows":"5:6"})),
+        ("range.setValues".into(), json!({"range":"F15","values":[[true,"=1/0","43"],[-1,"=F10#","=D5:H8"]]})),
+        ("home.borders".into(), json!({"preset":"outside","range":"I13:M14"})),
+        ("formulas.defineName".into(), json!({"name":"my_list","refersTo":"='Sales'!$J$11:$K$11"})),
+        ("range.fill".into(), json!({"input":"=D22:F27","range":"H12:L15"})),
+    ];
+    match replay("sales", &seq) {
+        Some(f) => {
+            eprintln!("156 replay fails at {} [{}]: {}", f.step, f.kind, f.what);
+            let min = shrink("sales", &seq, f.kind);
+            for (id, p) in &min {
+                eprintln!("    s.execute(\"{id}\", json!({p})).ok();");
+            }
+            if let Some(f) = replay("sales", &min) {
+                eprintln!("  min fails with [{}]: {}", f.kind, f.what);
+            }
+        }
+        None => eprintln!("156 replay passes"),
+    }
+    let seeds: Vec<u64> = std::fs::read_to_string("D:/craft-build/seeds3865.txt").unwrap_or_default().split_whitespace().filter_map(|s| s.parse().ok()).collect();
+    for seed in seeds {
+        let t = std::time::Instant::now();
+        let mut rng = Rng(seed.wrapping_mul(0xA24B_AED4_963E_E407) ^ 0x5EED);
+        let sample = SAMPLES[(seed % SAMPLES.len() as u64) as usize];
+        eprintln!("=== seed {seed} sample {sample}");
+        let mut h = Harness::new(sample);
+        let mut sequence = Vec::new();
+        let mut failure = None;
+        for i in 0..60 {
+            let ts = std::time::Instant::now();
+            let (id, params) = generate(&mut rng, &h.s);
+            sequence.push((id.clone(), params.clone()));
+            eprintln!("        (\"{id}\".into(), json!({params})), // {i}");
+            let r = h.step(i, &id, &params);
+            eprintln!("          // {:?} undo={}", ts.elapsed(), h.s.doc().map(|d| d.undo.len()).unwrap_or(0));
+            if let Err(f) = r {
+                failure = Some(f);
+                break;
+            }
+        }
+        if failure.is_none() {
+            let ts = std::time::Instant::now();
+            failure = h.finish(60).err();
+            eprintln!("          // finish {:?}", ts.elapsed());
+        }
+        eprintln!("=== seed {seed} took {:?}", t.elapsed());
+        if let Some(f) = failure {
+            if f.kind == "undo" || f.kind == "redo" {
+                eprintln!("FAIL [{}] at {}: {}", f.kind, f.step, f.what);
+                continue;
+            }
+            eprintln!("{}", report(seed, 60, sample, &sequence, &f));
+            let end = (f.step + 1).min(sequence.len());
+            let min = shrink(sample, &sequence[..end], f.kind);
+            eprintln!("minimal ({}):", min.len());
+            for (id, p) in &min {
+                eprintln!("    s.execute(\"{id}\", json!({p})).ok();");
+            }
+            if let Some(f) = replay(sample, &min) {
+                eprintln!("  fails with [{}]: {}", f.kind, f.what);
+            }
+        } else {
+            eprintln!("passes");
+        }
+    }
+}
+
+#[test]
 fn params_docs_parse_into_keys() {
     let keys = doc_keys("{range?, shift: right|down|row|column, input: \"text, number or =formula\"}");
     let names: Vec<_> = keys.iter().map(|(k, o, _)| (k.as_str(), *o)).collect();
