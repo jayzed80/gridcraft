@@ -11,9 +11,7 @@ pub(super) fn accrint(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let par = if has(a, 4) { num(a, 4)? } else { 1000.0 };
     let freq = freq_arg(a, 5)?;
     let basis = basis_arg(a, 6)?;
-    // calc_method is still validated, but Excel accrues from issue for both TRUE and FALSE: with
-    // FALSE and settlement after first_interest it does not drop the earlier interest (#3955).
-    opt_bool(a, 7, true)?;
+    let calc_method = opt_bool(a, 7, true)?;
     if issue >= settle || rate <= 0.0 || par <= 0.0 {
         return Err(CellError::Num);
     }
@@ -41,7 +39,7 @@ pub(super) fn accrint(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
         }
         Ok(j)
     };
-    let start = issue;
+    let start = if calc_method || settle <= first { issue } else { cd(index_of(settle)?)? };
     let mut j = index_of(start)?;
     let mut sum = 0.0;
     let mut guard = 0;
