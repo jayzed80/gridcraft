@@ -393,12 +393,7 @@ fn numbervalue(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
             out.push(c);
         }
     }
-    // Text that is empty once the percent signs and group separators are gone reads as zero, and
-    // currency notation is not a number here (observed in Excel).
-    if out.contains('$') {
-        return Err(CellError::Value);
-    }
-    let mut n = if out.is_empty() { 0.0 } else { parse_number_text_in(&out, c.date_system()).ok_or(CellError::Value)? };
+    let mut n = parse_number_text_in(&out, c.date_system()).ok_or(CellError::Value)?;
     for _ in 0..pct {
         n /= 100.0;
     }
