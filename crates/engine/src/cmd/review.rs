@@ -158,7 +158,6 @@ fn protect_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         delete_rows: b("deleteRows"),
         sort: b("sort"),
         autofilter: b("autofilter"),
-        insert_hyperlinks: b("insertHyperlinks"),
     };
     let d = s.doc()?;
     let what = d.wb.sheet(sheet).map(|sh| sh.name.clone()).unwrap_or_default();
