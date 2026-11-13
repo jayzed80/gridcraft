@@ -700,10 +700,6 @@ fn textsplit(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     if col_d.iter().all(|d| d.is_empty()) && row_d.iter().all(|d| d.is_empty()) {
         return Err(CellError::Value);
     }
-    // An empty entry inside a delimiter array is invalid, as it is in Excel.
-    if [&col_d, &row_d].iter().any(|d| d.len() > 1 && d.iter().any(|x| x.is_empty())) {
-        return Err(CellError::Value);
-    }
     let ignore = opt_bool(a, 3, false)?;
     let mode = opt_int(a, 4, 0)?;
     if !(0..=1).contains(&mode) {
