@@ -77,14 +77,9 @@ pub(super) fn accrintm(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     num_val(par * rate * year_frac(c.date_system(), issue, settle, basis)?)
 }
 
-/// settlement, maturity, value, value, [basis] for discount securities. The basis is checked
-/// first, and an omitted required argument (`DISC(,m,…)`) is `#N/A` rather than zero, as in Excel.
+/// settlement, maturity, value, value, [basis] for discount securities.
 fn disc_args(a: &[Arg]) -> R<(f64, f64, f64, f64, u32)> {
-    let b = basis_arg(a, 4)?;
-    if (0..4).any(|i| !has(a, i)) {
-        return Err(CellError::NA);
-    }
-    let (s, m, x, y) = (date(a, 0)?, date(a, 1)?, num(a, 2)?, num(a, 3)?);
+    let (s, m, x, y, b) = (date(a, 0)?, date(a, 1)?, num(a, 2)?, num(a, 3)?, basis_arg(a, 4)?);
     if s >= m || x <= 0.0 || y <= 0.0 {
         return Err(CellError::Num);
     }
