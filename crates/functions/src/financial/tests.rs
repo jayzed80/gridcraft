@@ -237,6 +237,20 @@ fn odd_periods() {
 }
 
 #[test]
+fn odd_last_rejects_a_last_interest_before_the_first_maturity_anniversary_of_1900() {
+    // #4074: Excel returns #NUM! when the maturity-anchored coupon date on or before
+    // last_interest would fall before 1900 (serials 1 and 61 here); serial 180 still prices.
+    let price = |last: f64| ev("ODDLPRICE", vec![d(2023, 2, 1), d(2023, 4, 1), n(last), n(0.05), n(0.04), n(100.0), n(1.0), n(0.0)]);
+    let yld = |last: f64| ev("ODDLYIELD", vec![d(2023, 2, 1), d(2023, 4, 1), n(last), n(0.05), n(100.0), n(100.0), n(1.0), n(0.0)]);
+    for last in [1.0, 61.0] {
+        is_err(price(last), CellError::Num);
+        is_err(yld(last), CellError::Num);
+    }
+    close_tol(price(180.0), 96.10623620309059, 1e-10);
+    close_tol(yld(180.0), 0.007013032552159747, 1e-10);
+}
+
+#[test]
 fn odd_periods_survive_hostile_input() {
     // Quarterly quasi-periods across the whole date range, huge rates and yields: a value or
     // an error, never a panic or a hang.
