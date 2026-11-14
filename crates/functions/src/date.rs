@@ -477,9 +477,8 @@ pub(crate) fn yearfrac_core(sys: DateSystem, s: i64, e: i64, basis: i64) -> R<f6
                 days / year_len
             } else {
                 let years = (d2.year - d1.year + 1) as f64;
-                // Real calendar-year lengths: 1900-system serials would count the fictitious 29 February 1900 (#4098).
-                let span: f64 = (d1.year..=d2.year).map(|y| if is_leap(y) { 366.0 } else { 365.0 }).sum();
-                days / (span / years)
+                let span = ymd_serial(sys, d2.year as i64 + 1, 1, 1).unwrap_or(e + 1) - ymd_serial(sys, d1.year as i64, 1, 1).unwrap_or(s);
+                days / (span as f64 / years)
             }
         }
         2 => days / 360.0,
