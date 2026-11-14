@@ -477,11 +477,7 @@ pub(crate) fn yearfrac_core(sys: DateSystem, s: i64, e: i64, basis: i64) -> R<f6
                 days / year_len
             } else {
                 let years = (d2.year - d1.year + 1) as f64;
-                // January 1 after the last supported year has no serial; count the final year's length instead.
-                let end = ymd_serial(sys, d2.year as i64 + 1, 1, 1)
-                    .or_else(|_| ymd_serial(sys, d2.year as i64, 1, 1).map(|jan1| jan1 + if is_leap(d2.year) { 366 } else { 365 }))
-                    .unwrap_or(e + 1);
-                let span = end - ymd_serial(sys, d1.year as i64, 1, 1).unwrap_or(s);
+                let span = ymd_serial(sys, d2.year as i64 + 1, 1, 1).unwrap_or(e + 1) - ymd_serial(sys, d1.year as i64, 1, 1).unwrap_or(s);
                 days / (span as f64 / years)
             }
         }
