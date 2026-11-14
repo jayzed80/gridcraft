@@ -112,15 +112,11 @@ pub(super) fn intrate(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 
 pub(super) fn received(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let (s, m, inv, d, b) = disc_args(a)?;
-    let sys = c.date_system();
-    // Multiply before dividing: 1 - d * (days / year) can round a zero or negative
-    // denominator up to a tiny positive one (#4085). Rounding is monotonic, so
-    // d * days >= year exactly when the denominator is not positive.
-    let (discounted, year) = (d * day_count(sys, s, m, b)?, year_basis(sys, b, s)?);
-    if discounted >= year {
+    let denom = 1.0 - d * disc_frac(c.date_system(), s, m, b)?;
+    if denom <= 0.0 {
         return Err(CellError::Num);
     }
-    num_val(inv / ((year - discounted) / year))
+    num_val(inv / denom)
 }
 
 fn tbill_args(a: &[Arg], sys: DateSystem) -> R<(f64, f64)> {
