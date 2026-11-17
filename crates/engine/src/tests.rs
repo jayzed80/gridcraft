@@ -2737,6 +2737,50 @@ fn xlsx_roundtrip_through_engine() {
     assert_eq!(v(&s, "B3"), Value::Number(3.0));
 }
 
+/// An Excel-authored worksheet group (Ctrl-clicked tabs: `tabSelected` on each member, the
+/// active sheet among them) survives an open + save through the engine — what `gridcraft-cli
+/// convert` does — instead of shrinking to the active sheet (#4361).
+#[test]
+fn a_worksheet_group_survives_an_engine_roundtrip() {
+    let grouped_xlsx = || {
+        use std::io::{Cursor, Write};
+        let sheet = |selected: bool| {
+            format!(
+                r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView{} workbookViewId="0"/></sheetViews><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>"#,
+                if selected { r#" tabSelected="1""# } else { "" }
+            )
+        };
+        let workbook = r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><bookViews><workbookView activeTab="2"/></bookViews><sheets><sheet name="Alpha" sheetId="1" r:id="rId1"/><sheet name="Middle" sheetId="2" r:id="rId2"/><sheet name="Last" sheetId="3" r:id="rId3"/></sheets></workbook>"#;
+        let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/></Relationships>"#;
+        let root_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#;
+        let types = r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/></Types>"#;
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, data) in [
+            ("[Content_Types].xml", types),
+            ("_rels/.rels", root_rels),
+            ("xl/workbook.xml", workbook),
+            ("xl/_rels/workbook.xml.rels", rels),
+            ("xl/worksheets/sheet1.xml", &sheet(true)),
+            ("xl/worksheets/sheet2.xml", &sheet(false)),
+            ("xl/worksheets/sheet3.xml", &sheet(true)),
+        ] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            zip.write_all(data.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    };
+    let mut s = s();
+    let b64 = crate::io::base64_encode(&grouped_xlsx());
+    s.execute("file.open", json!({"name": "grouped.xlsx", "base64": b64})).unwrap();
+    let group = |wb: &gridcraft_model::Workbook| (wb.active().unwrap().name.clone(), wb.sheets.iter().map(|sh| sh.tab_selected).collect::<Vec<_>>());
+    assert_eq!(group(&s.doc().unwrap().wb), ("Last".into(), vec![true, false, true]), "the group opens onto the model");
+
+    let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let saved = crate::io::base64_decode(r["base64"].as_str().unwrap()).unwrap();
+    let (back, _) = gridcraft_xlsx::read_xlsx(&saved).unwrap();
+    assert_eq!(group(&back), ("Last".into(), vec![true, false, true]), "the save keeps every group member selected");
+}
+
 fn ods_fixture() -> Vec<u8> {
     use std::io::{Cursor, Write};
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));

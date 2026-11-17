@@ -165,6 +165,12 @@ pub struct Sheet {
     /// Normal, Page Layout or Page Break Preview.
     #[serde(default)]
     pub view: SheetViewMode,
+    /// The sheet's tab is part of the workbook's selected sheet group (the file's `tabSelected`,
+    /// set by Excel when tabs are grouped with Ctrl-click): a save writes the flag back so the
+    /// group does not shrink to the active sheet. Kept exactly as the file had it; GridCraft
+    /// cannot edit the group yet (that is #991), and the active sheet is selected regardless.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tab_selected: bool,
     /// Unmodelled file content of this sheet kept for saving (form controls, OLE objects, query
     /// tables). Goes away with the sheet; not in JSON.
     #[serde(skip)]
@@ -231,6 +237,7 @@ impl Sheet {
             view_active: CellRef::default(),
             view_top_left: CellRef::default(),
             view: SheetViewMode::Normal,
+            tab_selected: false,
             preserved: None,
         }
     }

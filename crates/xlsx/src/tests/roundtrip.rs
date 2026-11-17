@@ -1868,6 +1868,49 @@ fn workbook_view_settings_survive_a_round_trip() {
     assert!(xml.contains("<workbookView activeTab=\"0\"/>"), "defaults stay unwritten: {xml}");
 }
 
+/// #4361: Excel groups worksheet tabs with Ctrl-click and marks every grouped sheet's view
+/// `tabSelected="1"`, the active sheet among them. A save must write the flag on each grouped
+/// sheet, or Excel reopens the group shrunken to the active tab (`Window.SelectedSheets`).
+#[test]
+fn a_worksheet_group_survives_a_round_trip() {
+    let sheet = |selected: bool| {
+        format!(
+            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView{} workbookViewId="0"/></sheetViews><sheetData/></worksheet>"#,
+            if selected { r#" tabSelected="1""# } else { "" }
+        )
+        .into_bytes()
+    };
+    // Alpha and Last are grouped, Last is active; Middle is not in the group.
+    let workbook = r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><bookViews><workbookView activeTab="2"/></bookViews><sheets><sheet name="Alpha" sheetId="1" r:id="rId1"/><sheet name="Middle" sheetId="2" r:id="rId2"/><sheet name="Last" sheetId="3" r:id="rId3"/></sheets></workbook>"#;
+    let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/></Relationships>"#;
+    let bytes = super::make_zip(&[
+        ("[Content_Types].xml", super::CT.as_bytes()),
+        ("_rels/.rels", super::ROOT_RELS.as_bytes()),
+        ("xl/workbook.xml", workbook.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+        ("xl/worksheets/sheet1.xml", sheet(true).as_slice()),
+        ("xl/worksheets/sheet2.xml", sheet(false).as_slice()),
+        ("xl/worksheets/sheet3.xml", sheet(true).as_slice()),
+    ]);
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    assert_eq!(wb.active_sheet(), 2, "Last is the active sheet");
+    assert_eq!(
+        (wb.sheet(0).unwrap().tab_selected, wb.sheet(1).unwrap().tab_selected, wb.sheet(2).unwrap().tab_selected),
+        (true, false, true),
+        "the reader keeps each sheet's tabSelected"
+    );
+
+    let out = write_xlsx(&wb).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(out)).unwrap();
+    let mut selected = |n: u32| -> bool {
+        let mut xml = String::new();
+        zip.by_name(&format!("xl/worksheets/sheet{n}.xml")).unwrap().read_to_string(&mut xml).unwrap();
+        xml.contains(r#"tabSelected="1""#)
+    };
+    assert!(selected(1) && selected(3), "the group Alpha + Last stays selected on save");
+    assert!(!selected(2), "Middle was never in the group");
+}
+
 /// Three original empty worksheets let view selection be checked through `activeTab`,
 /// independently of the flags and ratio carried by the same window.
 fn workbook_with_window_views(views: &str) -> Vec<u8> {
