@@ -59,58 +59,85 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         .exact_size(h)
         .frame(egui::Frame::NONE.fill(t.window).inner_margin(egui::Margin { left: 10, right: 10, top: 0, bottom: 6 }))
         .show(ui, |ui| {
+            let left = ui.cursor().min.x;
+            let screen = ui.ctx().content_rect();
+            let fits = (screen.right() - left - (left - screen.left()).max(0.0)).max(0.0);
+            let row_w = ui.available_width().min(fits);
             // Tabs row.
-            let tabs_rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 32.0));
+            let tabs_rect = Rect::from_min_size(ui.cursor().min, vec2(row_w, 32.0));
             ui.scope_builder(egui::UiBuilder::new().max_rect(tabs_rect), |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 2.0;
-                    ui.add_space(8.0);
-                    if app.chrome.file_tab {
-                        file_menu(app, ui);
-                    }
-                    let mut tabs: Vec<&str> = TABS.to_vec();
-                    let ctx_tabs = contextual_tabs(app);
-                    tabs.extend(ctx_tabs.iter());
-                    for tab in tabs {
-                        let active = app.ui.ribbon_tab == tab;
-                        let contextual = ctx_tabs.contains(&tab);
-                        let font = theme::ui_font(13.5);
-                        let label = app.ui.language.tr(tab);
-                        let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x;
-                        let (r, resp) = ui.allocate_exact_size(vec2(tw + 22.0, 30.0), Sense::click());
-                        if resp.hovered() && !active {
-                            ui.painter().rect_filled(r.shrink2(vec2(2.0, 4.0)), 5.0, t.hover);
+                let target_id = tab_row_scroll_target_id();
+                let mut area = egui::ScrollArea::horizontal()
+                    .id_salt("ribbon_tabs_scroll")
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
+                if let Some((frame, x)) = ui.ctx().data_mut(|d| d.remove_temp::<(u64, f32)>(target_id))
+                    && ui.ctx().cumulative_frame_nr().saturating_sub(frame) <= 1
+                {
+                    area = area.horizontal_scroll_offset(x);
+                }
+                let prev_tab: Option<String> = ui.ctx().data(|d| d.get_temp(last_ribbon_tab_id()));
+                let tab_changed = prev_tab.as_deref() != Some(app.ui.ribbon_tab.as_str());
+                ui.ctx().data_mut(|d| d.insert_temp(last_ribbon_tab_id(), app.ui.ribbon_tab.clone()));
+                let scroll = area.show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        ui.add_space(8.0);
+                        if app.chrome.file_tab {
+                            file_menu(app, ui);
                         }
-                        let color = if contextual {
-                            t.accent
-                        } else if active {
-                            t.text
-                        } else {
-                            t.text_dim
-                        };
-                        ui.painter().text(r.center(), Align2::CENTER_CENTER, label, if active { theme::ui_bold(13.5) } else { font }, color);
-                        if active {
-                            let ul = Rect::from_center_size(pos2(r.center().x, r.bottom() - 3.0), vec2(tw.clamp(20.0, 40.0), 3.0));
-                            ui.painter().rect_filled(ul, 1.5, t.accent);
-                        }
-                        if resp.clicked() {
-                            if active && !collapsed {
-                                app.ui.ribbon_collapsed = true;
+                        let mut tabs: Vec<&str> = TABS.to_vec();
+                        let ctx_tabs = contextual_tabs(app);
+                        tabs.extend(ctx_tabs.iter());
+                        for tab in tabs {
+                            let active = app.ui.ribbon_tab == tab;
+                            let contextual = ctx_tabs.contains(&tab);
+                            let font = theme::ui_font(13.5);
+                            let label = app.ui.language.tr(tab);
+                            let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x;
+                            let (r, resp) = ui.allocate_exact_size(vec2(tw + 22.0, 30.0), Sense::click());
+                            resp.widget_info(|| {
+                                let mut info = egui::WidgetInfo::labeled(egui::Role::Tab, true, label);
+                                info.selected = Some(active);
+                                info
+                            });
+                            if active && tab_changed {
+                                resp.scroll_to_me(None);
+                            }
+                            if resp.hovered() && !active {
+                                ui.painter().rect_filled(r.shrink2(vec2(2.0, 4.0)), 5.0, t.hover);
+                            }
+                            let color = if contextual {
+                                t.accent
+                            } else if active {
+                                t.text
                             } else {
-                                app.ui.ribbon_tab = tab.to_string();
-                                app.ui.ribbon_collapsed = false;
+                                t.text_dim
+                            };
+                            ui.painter().text(r.center(), Align2::CENTER_CENTER, label, if active { theme::ui_bold(13.5) } else { font }, color);
+                            if active {
+                                let ul = Rect::from_center_size(pos2(r.center().x, r.bottom() - 3.0), vec2(tw.clamp(20.0, 40.0), 3.0));
+                                ui.painter().rect_filled(ul, 1.5, t.accent);
+                            }
+                            if resp.clicked() {
+                                if active && !collapsed {
+                                    app.ui.ribbon_collapsed = true;
+                                } else {
+                                    app.ui.ribbon_tab = tab.to_string();
+                                    app.ui.ribbon_collapsed = false;
+                                }
+                            }
+                            if resp.double_clicked() {
+                                app.ui.ribbon_collapsed = !collapsed;
+                            }
+                            if app.keytips.prefix() == Some("")
+                                && let Some(sequence) = keytip_table::tab_sequence(tab)
+                            {
+                                keytip(app, ui, sequence, pos2(r.center().x, r.bottom() - 1.0));
                             }
                         }
-                        if resp.double_clicked() {
-                            app.ui.ribbon_collapsed = !collapsed;
-                        }
-                        if app.keytips.prefix() == Some("")
-                            && let Some(sequence) = keytip_table::tab_sequence(tab)
-                        {
-                            keytip(app, ui, sequence, pos2(r.center().x, r.bottom() - 1.0));
-                        }
-                    }
+                    });
                 });
+                paint_scroll_arrows(ui, &t, target_id, "ribbon_tabs_scroll_arrow", ("Scroll ribbon tabs left", "Scroll ribbon tabs right"), &scroll);
             });
             if collapsed {
                 return;
@@ -118,10 +145,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             // Ribbon card. The row above it can be wider than a narrow window, so the card is kept
             // within the window (with the margin it has on the left), or its right scroll arrow
             // would be drawn off screen.
-            let left = ui.cursor().min.x;
-            let screen = ui.ctx().content_rect();
-            let fits = (screen.right() - left - (left - screen.left()).max(0.0)).max(0.0);
-            let card = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width().min(fits), 88.0));
+            let card = Rect::from_min_size(ui.cursor().min, vec2(row_w, 88.0));
             ui.painter().rect_filled(card, 10.0, t.ribbon);
             ui.painter().rect_stroke(card, 10.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
             let inner = card.shrink2(vec2(10.0, 6.0));
@@ -202,11 +226,20 @@ impl RibbonOverflow {
     }
 }
 
+/// Where a tab-row arrow click asks the next frame's `ScrollArea` to scroll to.
+fn tab_row_scroll_target_id() -> egui::Id {
+    egui::Id::unique("ribbon_tabs_scroll_target")
+}
+
+/// Tracks the last active ribbon tab so programmatic/keytip tab switches scroll the tab into view.
+fn last_ribbon_tab_id() -> egui::Id {
+    egui::Id::unique("ribbon_last_active_tab")
+}
+
 /// When the tab's groups are wider than the card, arrows at its edges scroll them (horizontal wheel or
 /// trackpad input over the card still does too).
 fn scroll_arrows(ui: &mut Ui, t: &Tokens, tab: &str, scroll: egui::scroll_area::ScrollAreaOutput<()>) {
     let inner = scroll.inner_rect;
-    let max = (scroll.content_size.x - inner.width()).max(0.0);
     let overflow = RibbonOverflow {
         content: scroll.content_size.x,
         visible: inner.width(),
@@ -215,12 +248,28 @@ fn scroll_arrows(ui: &mut Ui, t: &Tokens, tab: &str, scroll: egui::scroll_area::
         visible_height: inner.height(),
     };
     ui.ctx().data_mut(|d| d.insert_temp(RibbonOverflow::id(), overflow));
-    if !overflow.overflows() {
+    paint_scroll_arrows(ui, t, RibbonOverflow::scroll_target_id(tab), "ribbon_scroll_arrow", ("Scroll ribbon left", "Scroll ribbon right"), &scroll);
+}
+
+/// Draws left/right scroll arrows at the edges of an overflowing horizontal `ScrollArea`.
+fn paint_scroll_arrows(
+    ui: &mut Ui,
+    t: &Tokens,
+    target_id: egui::Id,
+    salt: &str,
+    (left_label, right_label): (&str, &str),
+    scroll: &egui::scroll_area::ScrollAreaOutput<()>,
+) {
+    let inner = scroll.inner_rect;
+    let content = scroll.content_size.x;
+    if content <= inner.width() + 0.5 {
         return;
     }
+    let max = (content - inner.width()).max(0.0);
+    let offset = scroll.state.clamped_offset().x;
     let step = (inner.width() * 0.6).max(60.0);
     let mut target = None;
-    for (left, show) in [(true, overflow.offset > 0.5), (false, overflow.offset < max - 0.5)] {
+    for (left, show) in [(true, offset > 0.5), (false, offset < max - 0.5)] {
         if !show {
             continue;
         }
@@ -229,19 +278,19 @@ fn scroll_arrows(ui: &mut Ui, t: &Tokens, tab: &str, scroll: egui::scroll_area::
         } else {
             Rect::from_min_size(pos2(inner.right() - 18.0, inner.top()), vec2(18.0, inner.height()))
         };
-        let resp = ui.interact(r, ui.scope_id().with(("ribbon_scroll_arrow", left)), Sense::click());
+        let resp = ui.interact(r, ui.scope_id().with((salt, left)), Sense::click());
         ui.painter().rect_filled(r, 4.0, if resp.hovered() { t.hover } else { t.ribbon });
         ui.painter().rect_stroke(r, 4.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
         icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), if left { Icon::Left } else { Icon::Right }, t.text);
-        let name = if left { "Scroll ribbon left" } else { "Scroll ribbon right" };
+        let name = if left { left_label } else { right_label };
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
         if resp.on_hover_text(crate::i18n::current(ui.ctx()).tr(name)).clicked() {
-            target = Some(if left { overflow.offset - step } else { overflow.offset + step });
+            target = Some(if left { offset - step } else { offset + step });
         }
     }
     if let Some(x) = target {
         let frame = ui.ctx().cumulative_frame_nr();
-        ui.ctx().data_mut(|d| d.insert_temp(RibbonOverflow::scroll_target_id(tab), (frame, x.clamp(0.0, max))));
+        ui.ctx().data_mut(|d| d.insert_temp(target_id, (frame, x.clamp(0.0, max))));
         ui.ctx().request_repaint();
     }
 }

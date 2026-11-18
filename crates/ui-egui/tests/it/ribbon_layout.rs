@@ -1,7 +1,7 @@
 //! Ribbon layout: the big split button, the scroll arrows of an overflowing tab, and every tab
 //! fitting the card's height.
 
-use egui::vec2;
+use egui::{accesskit::Role, vec2};
 use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::icons::Icon;
@@ -93,6 +93,26 @@ fn the_scroll_arrows_stay_inside_a_narrow_window() {
         h.run_steps(3);
         assert!(RibbonOverflow::get(&h.ctx).offset > 0.0, "{width}: the right arrow scrolls");
     }
+}
+
+#[test]
+fn narrow_window_tab_row_scrolls_to_reach_later_tabs() {
+    let mut h = app_at(412.0, "Home");
+    assert!(h.query_by_label("Scroll ribbon tabs left").is_none(), "nothing to the left yet");
+    h.get_by_label("Scroll ribbon tabs right").click();
+    h.run_steps(3);
+    let data = h.get_by_role_and_label(Role::Tab, "Data");
+    assert!(data.rect().max.x <= 412.0, "Data tab should be inside the 412 px viewport, got {:?}", data.rect());
+    data.click();
+    h.run_steps(2);
+    assert_eq!(h.state().ui.ribbon_tab, "Data");
+    // Left arrow appears after scrolling right and scrolls back toward Home.
+    h.get_by_label("Scroll ribbon tabs left").click();
+    h.run_steps(3);
+    assert!(h.get_by_role_and_label(Role::Tab, "Home").rect().min.x >= 0.0);
+    // Wide windows fit every tab without tab-row scroll arrows.
+    let wide = app_at(1440.0, "Home");
+    assert!(wide.query_by_label("Scroll ribbon tabs right").is_none());
 }
 
 #[derive(Default)]
