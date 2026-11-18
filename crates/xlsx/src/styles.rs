@@ -6,8 +6,8 @@ use std::fmt::Write as _;
 
 use gridcraft_model::style::{DxfStated, Protection};
 use gridcraft_model::{
-    Alignment, BorderLine, BorderStyle, Borders, Color, Fill, Font, HAlign, NumFmt, PatternType, ReadingOrder, Style, TableStyle, TableStyleElement,
-    Underline, VAlign, VertAlign, Workbook,
+    Alignment, BorderLine, BorderStyle, Borders, Color, Fill, Font, HAlign, NumFmt, PatternType, ReadingOrder, Style, Underline, VAlign, VertAlign,
+    Workbook,
 };
 
 use crate::tables::{INDEXED, builtin_format, builtin_id};
@@ -30,8 +30,6 @@ pub struct StylesIn {
     pub named: Vec<(String, Style)>,
     /// Custom number formats (`numFmts`) by id.
     pub num_fmts: HashMap<u32, String>,
-    /// Custom table and PivotTable styles (`tableStyles`).
-    pub table_styles: Vec<TableStyle>,
 }
 
 pub fn read_color(e: &El, palette: &[u32]) -> Color {
@@ -397,67 +395,8 @@ pub fn read_styles(root: &El, checkboxes: &[bool], minor_font: &str) -> StylesIn
     }
     // Inline dxf format codes are interned: a code repeated by many dxfs is one allocation.
     let mut inline_fmts = HashMap::new();
-    let dxfs: Vec<Style> =
-        root.child("dxfs").map(|d| d.kids("dxf").map(|x| read_dxf(x, &palette, &shared_fmts, &mut inline_fmts)).collect()).unwrap_or_default();
-    let table_styles = read_table_styles(root, &dxfs);
-    StylesIn { xfs, dxfs, palette, named, num_fmts: fmts, table_styles }
-}
-
-/// `ST_TableStyleType` (ECMA-376 §18.18.77).
-const TABLE_STYLE_ELEMENT_TYPES: &[&str] = &[
-    "wholeTable",
-    "headerRow",
-    "totalRow",
-    "firstColumn",
-    "lastColumn",
-    "firstRowStripe",
-    "secondRowStripe",
-    "firstColumnStripe",
-    "secondColumnStripe",
-    "firstHeaderCell",
-    "lastHeaderCell",
-    "firstTotalCell",
-    "lastTotalCell",
-    "firstSubtotalColumn",
-    "secondSubtotalColumn",
-    "thirdSubtotalColumn",
-    "firstSubtotalRow",
-    "secondSubtotalRow",
-    "thirdSubtotalRow",
-    "blankRow",
-    "firstColumnSubheading",
-    "secondColumnSubheading",
-    "thirdColumnSubheading",
-    "firstRowSubheading",
-    "secondRowSubheading",
-    "thirdRowSubheading",
-    "pageFieldLabels",
-    "pageFieldValues",
-];
-
-fn read_table_styles(root: &El, dxfs: &[Style]) -> Vec<TableStyle> {
-    let Some(ts) = root.child("tableStyles") else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for t in ts.kids("tableStyle") {
-        let Some(name) = t.attr("name").filter(|n| !n.is_empty()) else {
-            continue;
-        };
-        let pivot = t.flag("pivot", true);
-        let table = t.flag("table", true);
-        let elements = t
-            .kids("tableStyleElement")
-            .filter_map(|e| {
-                let kind = e.attr("type").filter(|k| TABLE_STYLE_ELEMENT_TYPES.contains(k))?;
-                let size = e.attr_u32("size").unwrap_or(1).max(1);
-                let dxf = e.attr_u32("dxfId").and_then(|i| dxfs.get(i as usize)).cloned();
-                Some(TableStyleElement { kind: kind.to_string(), size, dxf })
-            })
-            .collect();
-        out.push(TableStyle { name: name.to_string(), pivot, table, elements });
-    }
-    out
+    let dxfs = root.child("dxfs").map(|d| d.kids("dxf").map(|x| read_dxf(x, &palette, &shared_fmts, &mut inline_fmts)).collect()).unwrap_or_default();
+    StylesIn { xfs, dxfs, palette, named, num_fmts: fmts }
 }
 
 /// One differential format (`dxf`): the style it sets over a cell's own.
@@ -721,48 +660,6 @@ impl NumFmts {
     }
 }
 
-fn write_table_styles(table_styles: &[TableStyle], dxfs: &mut Vec<Style>) -> String {
-    let mut xml = String::new();
-    let mut count = 0usize;
-    for ts in table_styles {
-        if ts.name.is_empty() {
-            continue;
-        }
-        count += 1;
-        let _ = write!(xml, "<tableStyle name=\"{}\"", esc_attr(&ts.name));
-        if !ts.pivot {
-            xml.push_str(" pivot=\"0\"");
-        }
-        if !ts.table {
-            xml.push_str(" table=\"0\"");
-        }
-        let elems: Vec<&TableStyleElement> = ts.elements.iter().filter(|e| TABLE_STYLE_ELEMENT_TYPES.contains(&e.kind.as_str())).collect();
-        let _ = write!(xml, " count=\"{}\"", elems.len());
-        if elems.is_empty() {
-            xml.push_str("/>");
-            continue;
-        }
-        xml.push('>');
-        for el in elems {
-            let _ = write!(xml, "<tableStyleElement type=\"{}\"", esc_attr(&el.kind));
-            if el.size > 1 {
-                let _ = write!(xml, " size=\"{}\"", el.size);
-            }
-            if let Some(dxf) = &el.dxf {
-                let id = dxf_id(dxfs, dxf);
-                let _ = write!(xml, " dxfId=\"{id}\"");
-            }
-            xml.push_str("/>");
-        }
-        xml.push_str("</tableStyle>");
-    }
-    if count == 0 {
-        "<tableStyles count=\"0\" defaultTableStyle=\"TableStyleMedium2\" defaultPivotStyle=\"PivotStyleLight16\"/>".into()
-    } else {
-        format!("<tableStyles count=\"{count}\" defaultTableStyle=\"TableStyleMedium2\" defaultPivotStyle=\"PivotStyleLight16\">{xml}</tableStyles>")
-    }
-}
-
 /// `styles.xml` for the workbook: one cell format per model style, in `StyleId` order (so a
 /// cell's `s` attribute is its style id), plus the given differential formats.
 /// `extra_fmts` are number formats used outside cell styles (PivotTable value fields); the
@@ -846,11 +743,8 @@ pub fn write_styles(wb: &Workbook, dxfs: &[Style], extra_fmts: &[String]) -> (St
         named += 1;
     }
 
-    let mut dxfs = dxfs.to_vec();
-    let table_styles = write_table_styles(&wb.table_styles, &mut dxfs);
-
     let mut dx = String::new();
-    for d in &dxfs {
+    for d in dxfs {
         dx.push_str("<dxf>");
         let def = Style::default();
         let st = &d.dxf_stated;
@@ -922,8 +816,7 @@ pub fn write_styles(wb: &Workbook, dxfs: &[Style], extra_fmts: &[String]) -> (St
     let _ = write!(s, "<cellXfs count=\"{count}\">{xfs}</cellXfs>");
     let _ = write!(s, "<cellStyles count=\"{named}\">{cell_styles}</cellStyles>");
     let _ = write!(s, "<dxfs count=\"{}\">{dx}</dxfs>", dxfs.len());
-    s.push_str(&table_styles);
-    s.push_str("</styleSheet>");
+    s.push_str("<tableStyles count=\"0\" defaultTableStyle=\"TableStyleMedium2\" defaultPivotStyle=\"PivotStyleLight16\"/></styleSheet>");
     (s, nf.map)
 }
 
