@@ -896,7 +896,7 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
             for col in r.start.col..=r.end.col {
                 let c = CellRef::new(row, col);
                 let merge = merges.get(&c);
-                if merge.is_some_and(|m| m.start != c) || sh.is_col_hidden(col) {
+                if merge.is_some_and(|m| m.start != c) || (fixed && sh.is_col_hidden(col)) {
                     continue;
                 }
                 let text = crate::display::cell_text(wb, sh, c);
@@ -904,10 +904,14 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
                 let css = html_cell_css(wb, sh, c, dir);
                 let span = merge
                     .map(|m| {
-                        // Spans count the table's visible lines: the merge is clipped to the table.
-                        let rows = visible(&rows_before, r.start.row, m.start.row, m.end.row.min(r.end.row));
-                        let cols = visible(&cols_before, r.start.col, m.start.col, m.end.col.min(r.end.col));
-                        format!(" rowspan=\"{rows}\" colspan=\"{cols}\"")
+                        if fixed {
+                            // Spans count the table's visible lines: the merge is clipped to the table.
+                            let rows = visible(&rows_before, r.start.row, m.start.row, m.end.row.min(r.end.row));
+                            let cols = visible(&cols_before, r.start.col, m.start.col, m.end.col.min(r.end.col));
+                            format!(" rowspan=\"{rows}\" colspan=\"{cols}\"")
+                        } else {
+                            format!(" rowspan=\"{}\" colspan=\"{}\"", m.height(), m.width())
+                        }
                     })
                     .unwrap_or_default();
                 // The text is escaped only as far as the page still has room for it.
