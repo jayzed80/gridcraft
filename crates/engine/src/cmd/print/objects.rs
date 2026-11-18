@@ -10,7 +10,7 @@ pub(super) fn draw_cell_picture(pg: &mut Page, data: &[u8], rect: (f32, f32, f32
     if w <= 0.0 || h <= 0.0 || data.len() > 16 * 1024 * 1024 {
         return;
     }
-    let Some((iw, ih)) = crate::io::image_size(data) else { return };
+    let Some((iw, ih)) = picture_size(data) else { return };
     if iw == 0 || ih == 0 || iw > 8192 || ih > 8192 || u64::from(iw) * u64::from(ih) > 16_000_000 {
         return;
     }
@@ -53,9 +53,15 @@ fn anchor_rect(sh: &Sheet, a: &Anchor) -> (f64, f64, f64, f64) {
     (sh.col_left(a.cell.col) + a.dx as f64, sh.row_top(a.cell.row) + a.dy as f64, a.width.max(0.0) as f64, a.height.max(0.0) as f64)
 }
 
+/// Pixel size of an embedded picture: PNG and JPEG from their headers, any other format the
+/// decoder knows (GIF, TIFF) from its own header reader, which reads no pixel data.
+fn picture_size(data: &[u8]) -> Option<(u32, u32)> {
+    crate::io::image_size(data).or_else(|| image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format().ok()?.into_dimensions().ok())
+}
+
 /// Decodes an embedded picture to RGBA, downscaled to at most `max_w`×`max_h` pixels.
 fn decode_image(data: &[u8], max_w: u32, max_h: u32) -> Option<(Vec<u8>, u32, u32)> {
-    let (w, h) = crate::io::image_size(data)?;
+    let (w, h) = picture_size(data)?;
     if w == 0 || h == 0 || w as u64 * h as u64 > 60_000_000 {
         return None;
     }

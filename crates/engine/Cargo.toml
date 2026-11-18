@@ -26,7 +26,8 @@ craft-gridcraft-format = { workspace = true }
 gridcraft-chart = { workspace = true }
 gridcraft-pdf = { workspace = true }
 gridcraft-math = { workspace = true }
-image = { workspace = true }
+# GIF and TIFF: workbooks embed them as pictures, and printing/PDF export decodes them.
+image = { workspace = true, features = ["gif", "tiff"] }
 unicode-segmentation = "=1.13.3"
 
 [dev-dependencies]

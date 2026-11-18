@@ -751,6 +751,68 @@ fn charts_and_images_are_drawn() {
     }
 }
 
+/// A 1×1 red GIF, written out by hand so the test does not need a GIF encoder.
+fn tiny_gif() -> Vec<u8> {
+    let mut gif = b"GIF89a".to_vec();
+    // Logical screen 1×1, a two-entry global colour table: red, black.
+    gif.extend_from_slice(&[1, 0, 1, 0, 0x80, 0, 0, 0xFF, 0, 0, 0, 0, 0]);
+    // Image descriptor, then LZW data (minimum code size 2: clear, index 0, end), then trailer.
+    gif.extend_from_slice(&[0x2C, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x44, 0x01, 0, 0x3B]);
+    gif
+}
+
+/// A 1×1 uncompressed 8-bit grey little-endian TIFF, written out by hand.
+fn tiny_tiff() -> Vec<u8> {
+    let entries: [(u16, u16, u32); 8] = [
+        (256, 3, 1),   // ImageWidth
+        (257, 3, 1),   // ImageLength
+        (258, 3, 8),   // BitsPerSample
+        (259, 3, 1),   // Compression: none
+        (262, 3, 1),   // PhotometricInterpretation: black is zero
+        (273, 4, 110), // StripOffsets: just after the IFD
+        (278, 3, 1),   // RowsPerStrip
+        (279, 4, 1),   // StripByteCounts
+    ];
+    let mut tiff = vec![b'I', b'I', 42, 0, 8, 0, 0, 0];
+    tiff.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    for (tag, kind, value) in entries {
+        tiff.extend_from_slice(&tag.to_le_bytes());
+        tiff.extend_from_slice(&kind.to_le_bytes());
+        tiff.extend_from_slice(&1u32.to_le_bytes());
+        if kind == 3 {
+            tiff.extend_from_slice(&(value as u16).to_le_bytes());
+            tiff.extend_from_slice(&[0, 0]);
+        } else {
+            tiff.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    tiff.extend_from_slice(&[0, 0, 0, 0]);
+    assert_eq!(tiff.len(), 110);
+    tiff.push(0x80);
+    tiff
+}
+
+#[test]
+fn gif_and_tiff_pictures_are_drawn() {
+    for (data, mime) in [(tiny_gif(), "image/gif"), (tiny_tiff(), "image/tiff")] {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "A1", "input": "Above"})).unwrap();
+        let d = s.doc_mut().unwrap();
+        let wb = std::sync::Arc::make_mut(&mut d.wb);
+        let id = wb.next_object_id();
+        wb.sheet_mut(0).unwrap().images.push(Image {
+            id,
+            anchor: Anchor { cell: CellRef::new(2, 1), dx: 0.0, dy: 0.0, width: 40.0, height: 40.0, mode: gridcraft_model::AnchorMode::MoveAndSize },
+            data: data.into(),
+            mime: mime.into(),
+            alt: String::new(),
+        });
+        let (pdf, _) = pdf_of(&mut s, json!({}));
+        assert!(contains(&pdf, "(Above) Tj"), "{mime}");
+        assert!(contains(&pdf, "/Subtype /Image"), "{mime} picture missing from the PDF");
+    }
+}
+
 #[test]
 fn page_setup_edits_settings() {
     let mut s = s();
