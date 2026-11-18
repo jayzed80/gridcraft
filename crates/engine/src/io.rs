@@ -377,6 +377,25 @@ fn part_too_large_message(name: &str, part: &str, size: u64) -> String {
 /// How much of a text file is read to tell whether it is a web page.
 const HTML_SNIFF_BYTES: usize = 64 << 10;
 
+/// The text of a web page. A byte order mark, then bytes that are valid UTF-8, read as they do
+/// in a CSV; otherwise the character set the page declares (`<meta charset>`, an `http-equiv`
+/// Content-Type) decides, as in a browser, so a Shift_JIS or Windows-1250 page keeps its letters
+/// (#4452). A page that declares none, or one the WHATWG standard doesn't know, reads
+/// as a CSV does (Windows-1252/1256).
+fn decode_page(bytes: &[u8]) -> String {
+    let has_bom = [&[0xEF, 0xBB, 0xBF][..], &[0xFF, 0xFE], &[0xFE, 0xFF]].iter().any(|bom| bytes.starts_with(bom));
+    if has_bom || std::str::from_utf8(bytes).is_ok() {
+        return gridcraft_xlsx::decode_text(bytes);
+    }
+    // The declaration was found by reading the page as ASCII, so a set that doesn't read ASCII as
+    // ASCII (a `utf-16` meta without a byte order mark, which browsers also ignore) can't be right.
+    let fits = |label: &str| craft_mime::charset::is_known(label) && craft_mime::charset::decode(b"<meta", label) == "<meta";
+    match craft_html::declared_charset(bytes) {
+        Some(label) if fits(&label) => craft_mime::charset::decode(bytes, &label),
+        _ => gridcraft_xlsx::decode_text(bytes),
+    }
+}
+
 /// A web page that holds a table, whatever its extension: a web app's "Export to Excel" is often
 /// HTML saved as `.xls` (#3166). Excel opens its table as a sheet (after warning that the format
 /// and extension don't match): the cells read like typed input (or as text with `csv_as_text`),
@@ -401,8 +420,7 @@ fn read_html_table(name: &str, kind: Option<FileKind>, bytes: &[u8], csv_as_text
     if !["<!doctype html", "<html", "<table", "<head", "<body", "<meta"].iter().any(|t| head.starts_with(t)) {
         return None;
     }
-    // Decoded as a CSV is (BOM, UTF-8, else Windows-1252/1256), so a legacy page keeps its letters.
-    let text = gridcraft_xlsx::decode_text(bytes);
+    let text = decode_page(bytes);
     let rows = crate::clip_html::table_cells(&text, gridcraft_core::MAX_ROWS as usize, gridcraft_core::MAX_COLS as usize);
     if rows.iter().all(Vec::is_empty) {
         return None;

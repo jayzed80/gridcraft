@@ -828,6 +828,50 @@ fn a_web_page_saved_as_xls_opens_its_table() {
 }
 
 #[test]
+fn a_web_page_reads_in_the_character_set_it_declares() {
+    // #4452: a Shift_JIS or Windows-1250 page was read as Windows-1252, so its letters turned into
+    // mojibake (and stayed so in the saved .xlsx). Like a browser and Excel, the page's own
+    // `<meta charset>` or `http-equiv` Content-Type says how to read its bytes.
+    let page = |meta: &str, cell: &[u8]| {
+        let mut b = format!("<html><head>{meta}</head><body><table><tr><td>").into_bytes();
+        b.extend_from_slice(cell);
+        b.extend_from_slice(b"</td><td>ASCII sentinel</td></tr></table></body></html>");
+        b
+    };
+    // 日本語の表 in Shift_JIS (CP932); the last trail byte, 0x5C, is a backslash in ASCII.
+    let japanese = [0x93, 0xFA, 0x96, 0x7B, 0x8C, 0xEA, 0x82, 0xCC, 0x95, 0x5C];
+    // Łódź, Šťastný, Żółć in Windows-1250.
+    let polish_czech = [0xA3, 0xF3, b'd', 0x9F, b',', b' ', 0x8A, 0x9D, b'a', b's', b't', b'n', 0xFD, b',', b' ', 0xAF, 0xF3, 0xB3, 0xE6];
+    let cases: [(&str, &[u8], &str); 3] = [
+        ("<meta http-equiv=\"Content-Type\" content=\"text/html; charset=Shift_JIS\">", &japanese, "日本語の表"),
+        ("<meta charset=\"windows-1250\">", &polish_czech, "Łódź, Šťastný, Żółć"),
+        ("<meta charset=windows-1252>", &[b'C', b'a', b'f', 0xE9], "Café"),
+    ];
+    for (meta, cell, text) in cases {
+        let (wb, _) = open_bytes("page.htm", &page(meta, cell)).unwrap();
+        let sh = wb.sheet(0).unwrap();
+        assert_eq!(sh.value(CellRef::parse("A1").unwrap()), gridcraft_core::Value::text(text), "{meta}");
+        assert_eq!(sh.value(CellRef::parse("B1").unwrap()), gridcraft_core::Value::text("ASCII sentinel"));
+        // The text survives a save as .xlsx.
+        let (reopened, _) = open_bytes("book.xlsx", &save_bytes(&wb, "book.xlsx").unwrap()).unwrap();
+        assert_eq!(reopened.sheet(0).unwrap().value(CellRef::parse("A1").unwrap()), gridcraft_core::Value::text(text));
+    }
+    // UTF-8 bytes stay UTF-8 whatever the page claims, and a byte order mark outranks the claim.
+    let (wb, _) = open_bytes("page.htm", &page("<meta charset=windows-1250>", "Żółć".as_bytes())).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("A1").unwrap()), gridcraft_core::Value::text("Żółć"));
+    let mut bom = vec![0xEF, 0xBB, 0xBF];
+    bom.extend_from_slice(&page("<meta charset=shift_jis>", "日本".as_bytes()));
+    let (wb, _) = open_bytes("page.htm", &bom).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("A1").unwrap()), gridcraft_core::Value::text("日本"));
+    // A charset that can't be (UTF-16 named inside a page of single bytes) or that nobody knows
+    // leaves the page read as before.
+    for meta in ["<meta charset=utf-16>", "<meta charset=no-such-set>"] {
+        let (wb, _) = open_bytes("page.htm", &page(meta, &[b'C', b'a', b'f', 0xE9])).unwrap();
+        assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("A1").unwrap()), gridcraft_core::Value::text("Café"), "{meta}");
+    }
+}
+
+#[test]
 fn a_web_page_table_keeps_its_characters_text_and_header_formats() {
     // A page saved in Windows-1252 keeps its accented letters (it read as replacement characters).
     let mut page = b"<html><body><table><tr><th>Caf".to_vec();
