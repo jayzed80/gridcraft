@@ -428,7 +428,6 @@ fn read_views(e: &El, sheet: &mut Sheet) {
     sheet.show_zeros = v.flag("showZeros", true);
     sheet.show_outline_symbols = v.flag("showOutlineSymbols", true);
     sheet.right_to_left = v.flag("rightToLeft", false);
-    sheet.tab_selected = v.flag("tabSelected", false);
     sheet.view = v.attr("view").and_then(gridcraft_model::SheetViewMode::parse).unwrap_or_default();
     if let Some(z) = v.attr_u32("zoomScale") {
         sheet.zoom = z.clamp(10, 400) as u16;

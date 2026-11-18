@@ -126,8 +126,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     }
     let _ = write!(s, "<dimension ref=\"{}\"/>", used.map(|u| u.a1()).unwrap_or_else(|| "A1".into()));
 
-    // `selected` is the active sheet; a sheet grouped onto it keeps its own `tabSelected` (#4361).
-    write_sheet_views(&mut s, sheet, selected || sheet.tab_selected);
+    write_sheet_views(&mut s, sheet, selected);
 
     // sheetFormatPr
     let max_row_outline = sheet.rows.values().map(|r| r.outline).max().unwrap_or(0);
