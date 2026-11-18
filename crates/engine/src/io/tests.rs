@@ -270,6 +270,36 @@ fn html_export_of_latin_ltr_sheet_is_unchanged() {
 }
 
 #[test]
+fn html_export_skips_hidden_columns_and_rows() {
+    use gridcraft_core::Value;
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_value(CellRef::new(0, 0), Value::text("vis_a1"));
+    sh.set_value(CellRef::new(0, 1), Value::text("hid_b1"));
+    sh.set_value(CellRef::new(0, 2), Value::text("vis_c1"));
+    sh.cols.insert(1, gridcraft_model::LineInfo { hidden: true, ..Default::default() });
+
+    let html = String::from_utf8(save_bytes(&wb, "book.html").unwrap()).unwrap();
+    assert!(html.contains(">vis_a1</td>") && html.contains(">vis_c1</td>"), "{html}");
+    assert!(!html.contains("hid_b1"), "hidden column value should be omitted: {html}");
+
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_value(CellRef::new(1, 0), Value::text("hid_a2"));
+    sh.set_value(CellRef::new(1, 1), Value::text("hid_b2"));
+    sh.set_value(CellRef::new(1, 2), Value::text("hid_c2"));
+    sh.rows.insert(1, gridcraft_model::LineInfo { hidden: true, ..Default::default() });
+    sh.set_value(CellRef::new(2, 0), Value::text("merged_ac"));
+    sh.merges.push(RangeRef::parse("A3:C3").unwrap());
+
+    let html = to_html(&wb, 0).unwrap();
+    assert!(html.contains(">vis_a1</td>") && html.contains(">vis_c1</td>"), "{html}");
+    for hidden in ["hid_b1", "hid_a2", "hid_b2", "hid_c2"] {
+        assert!(!html.contains(hidden), "{hidden} should be omitted: {html}");
+    }
+    assert!(html.contains("rowspan=\"1\" colspan=\"2\">merged_ac</td>"), "merge span should count visible columns: {html}");
+}
+
+#[test]
 fn html_export_fails_instead_of_dropping_cells_past_the_row_limit() {
     let mut wb = Workbook::new();
     let sh = wb.sheet_mut(0).unwrap();
