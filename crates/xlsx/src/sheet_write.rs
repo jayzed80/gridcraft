@@ -329,7 +329,13 @@ fn write_sheet_drawing(s: &mut String, wb: &Workbook, si: usize, sheet: &Sheet, 
             out.default_type(ext, image_content_type(ext));
             let file = out.image_part(ext, &img.data);
             let rid = drels.add("image", &format!("../media/{file}"));
-            objs.push(Obj::Image(img, rid));
+            // An SVG picture keeps its SVG source beside the raster fallback.
+            let svg_rid = img.svg.as_ref().filter(|svg| !svg.is_empty()).map(|svg| {
+                out.default_type("svg", image_content_type("svg"));
+                let file = out.image_part("svg", svg);
+                drels.add("image", &format!("../media/{file}"))
+            });
+            objs.push(Obj::Image(img, rid, svg_rid));
         }
         for ch in &sheet.charts {
             out.charts += 1;

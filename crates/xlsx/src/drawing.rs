@@ -167,8 +167,20 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                         continue;
                     };
                     let alt = obj.path(&["nvPicPr", "cNvPr"]).and_then(|c| c.attr("descr")).unwrap_or("").to_string();
+                    // An SVG picture: `a:blip` is its raster fallback and the SVG source hangs off
+                    // the blip's `asvg:svgBlip` extension.
+                    let svg_rid = obj
+                        .path(&["blipFill", "blip", "extLst"])
+                        .into_iter()
+                        .flat_map(|l| l.children.iter())
+                        .filter_map(|e| e.child("svgBlip"))
+                        .find_map(|b| b.attr("embed"));
+                    let svg = match svg_rid.and_then(|r| rels.iter().find(|rel| rel.id == r && !rel.external)) {
+                        Some(rel) => cx.pkg.read(&rel.target)?.map(std::sync::Arc::new),
+                        None => None,
+                    };
                     let id = cx.next_object_id();
-                    sheet.images.push(Image { id, anchor, data: data.into(), mime: mime_for(&target).to_string(), alt });
+                    sheet.images.push(Image { id, anchor, data: data.into(), mime: mime_for(&target).to_string(), alt, svg });
                 }
                 "graphicFrame" => {
                     let Some(gd) = obj.path(&["graphic", "graphicData"]) else { continue };
@@ -463,7 +475,8 @@ pub fn srgb(c: &Color, theme: &Theme) -> Option<String> {
 
 /// One drawing object to write.
 pub enum Obj<'a> {
-    Image(&'a Image, String),
+    /// A picture, its raster relationship id and, for an SVG picture, its SVG one.
+    Image(&'a Image, String, Option<String>),
     Chart(&'a gridcraft_model::Chart, String),
     Shape(&'a Shape),
 }
@@ -477,13 +490,19 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
         let id = i + 2;
         let close_tag;
         match o {
-            Obj::Image(img, rid) => {
+            Obj::Image(img, rid, svg_rid) => {
                 let (open, close) = anchor_open(sheet, &img.anchor);
                 close_tag = close;
                 s.push_str(&open);
+                let blip = match svg_rid {
+                    Some(svg) => format!(
+                        "<a:blip r:embed=\"{rid}\"><a:extLst><a:ext uri=\"{{96DAC541-7B7A-43D3-8B79-37D633B846F1}}\"><asvg:svgBlip xmlns:asvg=\"http://schemas.microsoft.com/office/drawing/2016/SVG/main\" r:embed=\"{svg}\"/></a:ext></a:extLst></a:blip>"
+                    ),
+                    None => format!("<a:blip r:embed=\"{rid}\"/>"),
+                };
                 let _ = write!(
                     s,
-                    "<xdr:pic><xdr:nvPicPr><xdr:cNvPr id=\"{id}\" name=\"Picture {}\" descr=\"{}\"/><xdr:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed=\"{rid}\"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>{}<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>",
+                    "<xdr:pic><xdr:nvPicPr><xdr:cNvPr id=\"{id}\" name=\"Picture {}\" descr=\"{}\"/><xdr:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill>{blip}<a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>{}<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>",
                     id - 1,
                     esc_attr(&img.alt),
                     xfrm(&img.anchor, "a:xfrm")

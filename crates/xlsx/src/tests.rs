@@ -31,6 +31,7 @@ mod shared_media;
 mod sheet_data_pin;
 mod sheet_names;
 mod smooth_roundtrip;
+mod svg_picture;
 mod trendline_roundtrip;
 mod xls_dv_tests;
 mod xls_style_tests;

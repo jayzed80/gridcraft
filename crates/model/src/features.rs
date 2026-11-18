@@ -654,6 +654,10 @@ pub struct Image {
     pub data: std::sync::Arc<Vec<u8>>,
     pub mime: String,
     pub alt: String,
+    /// The SVG source of a vector picture, kept beside `data` (its raster fallback) so a save
+    /// writes both, as Excel does.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::b64::opt")]
+    pub svg: Option<std::sync::Arc<Vec<u8>>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
