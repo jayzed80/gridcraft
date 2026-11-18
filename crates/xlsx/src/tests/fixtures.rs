@@ -4,7 +4,7 @@ use gridcraft_core::{CellError, CellRef, DateSystem, RangeRef, Value};
 use gridcraft_model::{CalcMode, CfRule, Color, HAlign, PatternType, StyleId, Underline, Visibility};
 
 use super::minimal;
-use crate::read_xlsx;
+use crate::{read_xlsx, write_xlsx};
 
 fn at(a: &str) -> CellRef {
     CellRef::parse(a).unwrap()
@@ -44,6 +44,38 @@ fn shared_formulas_and_value_types() {
     assert_eq!(s.value(at("A7")), Value::Number(9.0));
     assert_eq!(s.value(at("B7")), Value::Number(10.0));
     assert!(rep.warnings.iter().any(|w| w.contains("styles")));
+}
+
+/// A `t="d"` cell holds a literal calendar date, not an argument of the worksheet `DATE()`
+/// function. `DATE()` adds 1900 to a year below 1900; a literal must not, or 1800-01-02 becomes
+/// 3700-01-02. A date the date system cannot represent keeps the text the file gave.
+#[test]
+fn typed_dates_before_1900_are_not_shifted() {
+    let body = r#"<sheetData><row r="1">
+        <c r="A1" t="d"><v>1800-01-02</v></c>
+        <c r="B1" t="d"><v>1899-12-31</v></c>
+        <c r="C1" t="d"><v>0026-01-02</v></c>
+        <c r="D1" t="d"><v>1900-01-02</v></c>
+        <c r="E1" t="d"><v>2024-01-02</v></c>
+    </row></sheetData>"#;
+    let (wb, rep) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    // Before the 1900 epoch: the source calendar string is kept, never shifted by 1900 years.
+    assert_eq!(s.value(at("A1")), Value::text("1800-01-02"));
+    assert_eq!(s.value(at("B1")), Value::text("1899-12-31"));
+    assert_eq!(s.value(at("C1")), Value::text("0026-01-02"));
+    assert!(rep.warnings.iter().any(|w| w.contains("date cells")), "{:?}", rep.warnings);
+    // Dates the system represents are unchanged.
+    assert_eq!(s.value(at("D1")), Value::Number(2.0));
+    assert_eq!(s.value(at("E1")), Value::Number(45293.0));
+    // Saving and reopening keeps the source dates rather than rewriting them.
+    let (again, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    let s = again.sheet(0).unwrap();
+    assert_eq!(s.value(at("A1")), Value::text("1800-01-02"));
+    assert_eq!(s.value(at("B1")), Value::text("1899-12-31"));
+    assert_eq!(s.value(at("C1")), Value::text("0026-01-02"));
+    assert_eq!(s.value(at("D1")), Value::Number(2.0));
+    assert_eq!(s.value(at("E1")), Value::Number(45293.0));
 }
 
 #[test]
@@ -269,7 +301,7 @@ fn strict_namespace_and_shared_strings() {
     let wbx = r#"<x:workbook xmlns:x="http://purl.oclc.org/ooxml/spreadsheetml/main" xmlns:r="http://purl.oclc.org/ooxml/officeDocument/relationships"><x:sheets><x:sheet name="S" sheetId="1" r:id="rId1"/></x:sheets></x:workbook>"#;
     let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://purl.oclc.org/ooxml/officeDocument/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://purl.oclc.org/ooxml/officeDocument/relationships/sharedStrings" Target="sharedStrings.xml"/></Relationships>"#;
     let sst = r#"<x:sst xmlns:x="http://purl.oclc.org/ooxml/spreadsheetml/main"><x:si><x:t xml:space="preserve"> lead &amp; trail </x:t></x:si><x:si><x:r><x:t>a</x:t></x:r><x:r><x:t>b_x000D_c</x:t></x:r></x:si></x:sst>"#;
-    let ws = r#"<x:worksheet xmlns:x="http://purl.oclc.org/ooxml/spreadsheetml/main"><x:sheetData><x:row r="1"><x:c r="A1" t="s"><x:v>0</x:v></x:c><x:c r="B1" t="s"><x:v>1</x:v></x:c><x:c r="C1" t="s"><x:v>99</x:v></x:c></x:row></x:sheetData></x:worksheet>"#;
+    let ws = r#"<x:worksheet xmlns:x="http://purl.oclc.org/ooxml/spreadsheetml/main"><x:sheetData><x:row r="1"><x:c r="A1" t="s"><x:v>0</x:v></x:c><x:c r="B1" t="s"><x:v>1</x:v></x:c><x:c r="C1" t="s"><x:v>99</x:v></x:c><x:c r="D1" t="d"><x:v>1800-01-02</x:v></x:c></x:row></x:sheetData></x:worksheet>"#;
     let bytes = super::make_zip(&[
         ("[Content_Types].xml", ct.as_bytes()),
         ("_rels/.rels", root.as_bytes()),
@@ -283,6 +315,8 @@ fn strict_namespace_and_shared_strings() {
     assert_eq!(s.value(at("A1")), Value::text(" lead & trail "));
     assert_eq!(s.value(at("B1")), Value::text("ab\rc"));
     assert_eq!(s.value(at("C1")), Value::Empty);
+    // A typed date the date system cannot represent keeps its source text in a strict package too.
+    assert_eq!(s.value(at("D1")), Value::text("1800-01-02"));
     assert!(rep.warnings.iter().any(|w| w.contains("shared strings")));
 }
 

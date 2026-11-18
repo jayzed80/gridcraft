@@ -591,16 +591,17 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
         }
         "b" => v.map(|v| Value::Bool(matches!(v.trim(), "1" | "true" | "TRUE"))).unwrap_or(Value::Empty),
         "e" => v.map(|v| Value::Error(CellError::parse(v.trim()).unwrap_or(CellError::Value))).unwrap_or(Value::Empty),
-        "d" => match v.and_then(|v| parse_iso_datetime(v.trim(), cx.date_system)) {
-            Some(n) => Value::number(n),
-            None => {
-                if let Some(v) = v
-                    && !v.trim().is_empty()
-                {
-                    cx.warn("some date cells could not be read");
+        "d" => match v.map(str::trim).filter(|v| !v.is_empty()) {
+            Some(t) => match parse_iso_datetime(t, cx.date_system) {
+                Some(n) => Value::number(n),
+                // The date system cannot represent this date (or it is malformed): keep the file's
+                // text rather than shift it by 1900 years or discard it.
+                None => {
+                    cx.warn("some date cells could not be read; kept their text");
+                    Value::text(t)
                 }
-                Value::Empty
-            }
+            },
+            None => Value::Empty,
         },
         _ => match v.map(str::trim).filter(|v| !v.is_empty()) {
             Some(t) => match t.parse::<f64>() {
@@ -776,7 +777,9 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
     }
 }
 
-/// `2024-03-15`, `2024-03-15T10:30:00Z`, `10:30:00` → serial.
+/// `2024-03-15`, `2024-03-15T10:30:00Z`, `10:30:00` → serial. A calendar year outside what the
+/// date system represents gives `None`: a literal date is never expanded the way `DATE()` expands
+/// its year argument.
 pub fn parse_iso_datetime(s: &str, sys: DateSystem) -> Option<f64> {
     let s = s.trim_end_matches('Z');
     let (date, time) = match s.split_once('T') {
@@ -791,6 +794,15 @@ pub fn parse_iso_datetime(s: &str, sys: DateSystem) -> Option<f64> {
         let m: i64 = it.next()?.parse().ok()?;
         let d: i64 = it.next()?.parse().ok()?;
         if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+            return None;
+        }
+        // A literal calendar date is not an argument of `DATE()`: years below the epoch are not
+        // expanded by 1900, so an unrepresentable date is rejected instead of shifted forward.
+        let epoch_year = match sys {
+            DateSystem::D1900 => 1900,
+            DateSystem::D1904 => 1904,
+        };
+        if !(epoch_year..=9999).contains(&y) {
             return None;
         }
         serial = serial_from_ymd(sys, y, m, d)?;
@@ -931,6 +943,13 @@ mod tests {
         assert_eq!(parse_iso_datetime("06:00:00", DateSystem::D1900), Some(0.25));
         assert_eq!(parse_iso_datetime("garbage", DateSystem::D1900), None);
         assert_eq!(parse_iso_datetime("2024-13-01", DateSystem::D1900), None);
+        // A literal date's year is not expanded by 1900 the way DATE() expands its argument.
+        assert_eq!(parse_iso_datetime("1800-01-02", DateSystem::D1900), None);
+        assert_eq!(parse_iso_datetime("1899-12-31", DateSystem::D1900), None);
+        assert_eq!(parse_iso_datetime("0026-01-02", DateSystem::D1900), None);
+        // In the 1904 system a date before its epoch is equally unrepresentable.
+        assert_eq!(parse_iso_datetime("1900-01-02", DateSystem::D1904), None);
+        assert_eq!(parse_iso_datetime("1904-01-01", DateSystem::D1904), Some(0.0));
     }
 
     fn ctx(pkg: crate::package::Package<'_>) -> Ctx<'_> {
