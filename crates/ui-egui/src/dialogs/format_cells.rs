@@ -42,7 +42,7 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                 cols[1].label(egui::RichText::new(preview).font(theme::ui_font(15.0)));
                 cols[1].add_space(8.0);
                 let label = cols[1].label(lang.tr("Type (custom format code):"));
-                cols[1].add(egui::TextEdit::singleline(&mut code).desired_width(cols[1].available_width()).clip_text(true)).labelled_by(label.id);
+                cols[1].text_edit_singleline(&mut code).labelled_by(label.id);
                 for c in [
                     "0",
                     "0.00",

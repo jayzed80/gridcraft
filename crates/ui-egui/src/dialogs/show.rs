@@ -146,7 +146,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let mut open = true;
     let mut win_open = true;
     let mut confirm = false;
-    let width: f32 = match d.name.as_str() {
+    let width = match d.name.as_str() {
         "formatCells" => 560.0,
         "about" => 820.0,
         "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "equation" => 520.0,
@@ -159,7 +159,6 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "pasteSpecial" => 480.0,
         _ => 380.0,
     };
-    let width = width.min((ctx.content_rect().width() - 16.0).max(200.0));
     let window_id = egui::Id::unique("dialog").with(&d.name);
     let window = egui::Window::new(app.ui.language.tr(&d.title))
         .id(window_id)
