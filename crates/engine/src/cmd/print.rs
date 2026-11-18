@@ -170,6 +170,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
     let total: usize = layouts.iter().map(|l| l.pages.len()).sum();
     let (date, time) = hf_date_time(wb);
     let mut page_no = 0usize;
+    let mut next_printed_no = 1usize;
     let mut pending_links = Vec::new();
     let mut printed_blocks = Vec::new();
     // Decoded pictures are reused across the pages their anchor covers: a floating picture
@@ -180,8 +181,15 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
         let mut cf = crate::cf::CfCache::new();
         let k = lay.k();
         let (aw, ah) = lay.avail();
+        // `&P`: Page Setup's First page number restarts it at this sheet; Automatic carries on
+        // from the previous sheet (#4448).
+        if let Some(first) = lay.settings.first_page_number {
+            next_printed_no = usize::try_from(first).unwrap_or(usize::MAX);
+        }
         for (pi, (ri, ci)) in lay.pages.iter().enumerate() {
             page_no += 1;
+            let printed_no = next_printed_no;
+            next_printed_no = next_printed_no.saturating_add(1);
             let (Some(rband), Some(cband)) = (lay.row_bands.get(*ri).copied(), lay.col_bands.get(*ci).copied()) else { continue };
             let rsegs = segments(lay.title_rows, rband);
             let csegs = segments(lay.title_cols, cband);
@@ -229,7 +237,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
                 pg.rect_stroke(ox, oy, lay.heading_w * k, lay.heading_h * k, 0.3, [0xA0, 0xA0, 0xA0]);
             }
             let cx = HfContext {
-                page: page_no,
+                page: printed_no,
                 pages: total,
                 sheet: sh.name.clone(),
                 file: file.to_string(),

@@ -495,6 +495,43 @@ fn page_order_sets_the_sequence_of_the_pages_as_measured_in_excel() {
     }
 }
 
+/// Page Setup's First page number restarts `&P` at that sheet; an Automatic sheet carries on
+/// from the one before, and `&N` stays the count of printed pages (#4448).
+#[test]
+fn first_page_number_sets_the_printed_page_numbers() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    for sheet in ["Sheet1", "Two"] {
+        s.execute("range.setValues", json!({"sheet": sheet, "range": "A1", "values": [["top"], [""], ["bottom"]]})).unwrap();
+        s.execute("pageLayout.pageSetup", json!({"sheet": sheet, "rowBreaks": [3], "footer": "&CPAGE &P END TOTAL &N END"})).unwrap();
+    }
+    let printed = |s: &mut Session, firsts: [Option<u32>; 2]| -> Vec<String> {
+        for (si, first) in firsts.into_iter().enumerate() {
+            let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+            wb.sheet_mut(si).unwrap().print.first_page_number = first;
+        }
+        let (pdf, pages) = pdf_of(s, json!({"sheets": "all"}));
+        let text = String::from_utf8_lossy(&pdf);
+        let streams: Vec<&str> = text.split("endstream").filter(|part| part.contains("stream\n")).collect();
+        assert_eq!(streams.len() as u64, pages);
+        streams
+            .iter()
+            .map(|page| {
+                let at = page.find("(PAGE ").unwrap_or_else(|| panic!("no footer: {page}"));
+                page[at + 1..].split(") Tj").next().unwrap().to_string()
+            })
+            .collect()
+    };
+    let footers = |numbers: [u32; 4]| numbers.map(|n| format!("PAGE {n} END TOTAL 4 END")).to_vec();
+    assert_eq!(printed(&mut s, [None, None]), footers([1, 2, 3, 4]));
+    assert_eq!(printed(&mut s, [Some(7), None]), footers([7, 8, 9, 10]));
+    assert_eq!(printed(&mut s, [None, Some(7)]), footers([1, 2, 7, 8]));
+    // The largest number the file can hold neither crashes nor holds back the next sheet's start.
+    let huge = printed(&mut s, [Some(u32::MAX), Some(0)]);
+    assert_eq!(huge[0], format!("PAGE {} END TOTAL 4 END", u32::MAX));
+    assert_eq!(huge[2..], footers([0, 1, 2, 3])[..2]);
+}
+
 #[test]
 fn page_order_without_breaks_and_with_print_titles() {
     let mut s = s();
