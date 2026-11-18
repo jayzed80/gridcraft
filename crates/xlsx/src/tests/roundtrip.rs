@@ -2070,3 +2070,89 @@ fn remove_personal_information_is_kept_and_honoured() {
     assert_eq!(book.child("workbookPr").and_then(|p| p.attr("filterPrivacy")), None);
     assert!(String::from_utf8(pkg.read("docProps/core.xml").unwrap().unwrap()).unwrap().contains("Jane Example"));
 }
+
+#[test]
+fn custom_table_style_definition_survives_xlsx_save() {
+    // #4324: custom <tableStyles> definitions in xl/styles.xml (and the <dxf> formats they point to)
+    // were dropped on save while the table parts kept referencing the custom style name.
+    let styles = concat!(
+        r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#,
+        r#"<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>"#,
+        r#"<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>"#,
+        r#"<borders count="1"><border/></borders>"#,
+        r#"<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellXfs>"#,
+        r#"<dxfs count="1"><dxf><fill><patternFill><bgColor rgb="FF239AC1"/></patternFill></fill></dxf></dxfs>"#,
+        r#"<tableStyles count="1" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16">"#,
+        r#"<tableStyle name="HuntAccent" pivot="0" count="1"><tableStyleElement type="wholeTable" dxfId="0"/></tableStyle>"#,
+        r#"</tableStyles></styleSheet>"#,
+    );
+    let wb_rels =
+        r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+    let body = concat!(
+        r#"<sheetData>"#,
+        r#"<row r="1"><c r="A1" t="inlineStr"><is><t>Col1</t></is></c><c r="B1" t="inlineStr"><is><t>Col2</t></is></c><c r="D1" t="inlineStr"><is><t>Ctrl1</t></is></c><c r="E1" t="inlineStr"><is><t>Ctrl2</t></is></c></row>"#,
+        r#"<row r="2"><c r="A2"><v>1</v></c><c r="B2"><v>42</v></c><c r="D2"><v>2</v></c><c r="E2"><v>99</v></c></row>"#,
+        r#"</sheetData>"#,
+        r#"<tableParts count="2"><tablePart r:id="rId1"/><tablePart r:id="rId2"/></tableParts>"#,
+    );
+    let sheet_rels = concat!(
+        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+        r#"<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table1.xml"/>"#,
+        r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table2.xml"/>"#,
+        r#"</Relationships>"#,
+    );
+    let table1 = concat!(
+        r#"<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="1" name="Table1" displayName="Table1" ref="A1:B2">"#,
+        r#"<autoFilter ref="A1:B2"/>"#,
+        r#"<tableColumns count="2"><tableColumn id="1" name="Col1"/><tableColumn id="2" name="Col2"/></tableColumns>"#,
+        r#"<tableStyleInfo name="HuntAccent" showFirstColumn="0" showLastColumn="0" showRowStripes="1" showColumnStripes="0"/>"#,
+        r#"</table>"#,
+    );
+    let table2 = concat!(
+        r#"<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="2" name="Table2" displayName="Table2" ref="D1:E2">"#,
+        r#"<autoFilter ref="D1:E2"/>"#,
+        r#"<tableColumns count="2"><tableColumn id="1" name="Ctrl1"/><tableColumn id="2" name="Ctrl2"/></tableColumns>"#,
+        r#"<tableStyleInfo name="TableStyleMedium9" showFirstColumn="0" showLastColumn="0" showRowStripes="1" showColumnStripes="0"/>"#,
+        r#"</table>"#,
+    );
+    let bytes = super::minimal(
+        body,
+        &[
+            ("xl/styles.xml", styles),
+            ("xl/worksheets/_rels/sheet1.xml.rels", sheet_rels),
+            ("xl/tables/table1.xml", table1),
+            ("xl/tables/table2.xml", table2),
+        ],
+        wb_rels,
+        "",
+    );
+
+    let expected = vec![TableStyle {
+        name: "HuntAccent".into(),
+        pivot: false,
+        table: true,
+        elements: vec![TableStyleElement {
+            kind: "wholeTable".into(),
+            size: 1,
+            dxf: Some(Style { fill: Fill::solid(Color::Rgb(0x239AC1)), ..Style::default() }),
+        }],
+    }];
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    assert_eq!(wb.table_styles, expected);
+    let saved = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&saved).unwrap();
+    let styles_xml = String::from_utf8(pkg.read("xl/styles.xml").unwrap().unwrap()).unwrap();
+    assert!(
+        styles_xml.contains(r#"<tableStyles count="1" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"><tableStyle name="HuntAccent" pivot="0" count="1"><tableStyleElement type="wholeTable" dxfId="0"/></tableStyle></tableStyles>"#),
+        "{styles_xml}"
+    );
+    assert!(styles_xml.contains("FF239AC1"), "{styles_xml}");
+
+    let (reopened, _) = read_xlsx(&saved).unwrap();
+    assert_eq!(reopened.table_styles, expected);
+    let sh = reopened.sheet(0).unwrap();
+    assert_eq!(sh.tables[0].style, "HuntAccent");
+    assert_eq!(sh.tables[1].style, "TableStyleMedium9");
+    assert_eq!(sh.value(at("B2")), Value::Number(42.0));
+    assert_eq!(sh.value(at("E2")), Value::Number(99.0));
+}

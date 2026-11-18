@@ -162,7 +162,7 @@ fn read_workbook_styles(cx: &mut Ctx<'_>, wb: &mut Workbook, wb_rels: &[Rel]) ->
     }
     if let Some(r) = find_rel(wb_rels, "styles").cloned() {
         if let Some(x) = cx.optional_xml(&r.target)? {
-            let StylesIn { xfs, dxfs, palette, named, num_fmts } = read_styles(&x, &checkboxes, &wb.theme.minor_font);
+            let StylesIn { xfs, dxfs, palette, named, num_fmts, table_styles } = read_styles(&x, &checkboxes, &wb.theme.minor_font);
             cx.num_fmts = num_fmts;
             // Cell format 0 is the Normal cell format: everything on it (font, number format,
             // fill, borders, alignment, protection) is what a cell without its own format shows
@@ -174,6 +174,7 @@ fn read_workbook_styles(cx: &mut Ctx<'_>, wb: &mut Workbook, wb_rels: &[Rel]) ->
             cx.dxfs = dxfs;
             cx.palette = palette;
             wb.cell_styles = named;
+            wb.table_styles = table_styles;
         }
     } else {
         cx.warn("no styles part");

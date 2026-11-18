@@ -226,6 +226,9 @@ pub struct Workbook {
     pub custom_lists: Vec<Vec<String>>,
     /// Named cell styles (Cell Styles gallery): name → style.
     pub cell_styles: Vec<(String, crate::style::Style)>,
+    /// Custom table and PivotTable styles (`xl/styles.xml` `<tableStyles>`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub table_styles: Vec<crate::style::TableStyle>,
     /// Phonetic (furigana) data of shared strings (`xl/sharedStrings.xml`), one entry per string
     /// text, so that an open + save keeps a Japanese workbook's readings. Written back next to the
     /// `<si>` holding the same text.
@@ -362,6 +365,7 @@ impl Workbook {
             structure_password: None,
             custom_lists: vec![],
             cell_styles: vec![],
+            table_styles: vec![],
             phonetics: vec![],
             vba_project: None,
             csv_delimiter: None,

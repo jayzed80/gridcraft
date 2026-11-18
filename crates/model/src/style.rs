@@ -495,6 +495,43 @@ impl StyleTable {
 
 static DEFAULT_STYLE: std::sync::LazyLock<Style> = std::sync::LazyLock::new(Style::default);
 
+fn default_band_size() -> u32 {
+    1
+}
+
+fn is_default_band_size(n: &u32) -> bool {
+    *n == 1
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
+}
+
+/// One element of a custom table or PivotTable style (`<tableStyleElement>`).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TableStyleElement {
+    /// Element kind (`ST_TableStyleType`, e.g. `wholeTable`, `headerRow`).
+    pub kind: String,
+    /// Stripe band size (`size`); `1` by default.
+    #[serde(default = "default_band_size", skip_serializing_if = "is_default_band_size")]
+    pub size: u32,
+    /// Differential format (`dxfId`), when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dxf: Option<Style>,
+}
+
+/// A custom table or PivotTable style definition (`<tableStyle>` in `xl/styles.xml`).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TableStyle {
+    pub name: String,
+    #[serde(default = "default_minor", skip_serializing_if = "is_true")]
+    pub pivot: bool,
+    #[serde(default = "default_minor", skip_serializing_if = "is_true")]
+    pub table: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub elements: Vec<TableStyleElement>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
