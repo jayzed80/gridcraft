@@ -1,8 +1,9 @@
 use super::show::ok_cancel;
 use super::{Dialog, Json, Key, SheetApp, json};
 
-/// Draws the Find/Replace form with case, whole-cell and workbook options, requests field focus once, and runs find/replace with the current parameters.
+/// Draws the Find/Replace form with case, whole-cell, workbook and Look in options, requests field focus once, and runs find/replace with the current parameters.
 pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
+    let lang = app.ui.language;
     ui.horizontal(|ui| {
         for tab in ["Find", "Replace"] {
             if ui.selectable_label(d.tab == tab, tab).clicked() {
@@ -35,11 +36,29 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
         ui.checkbox(&mut whole, "Match entire cell contents");
         ui.checkbox(&mut wb, "Within workbook");
     });
+    // As in Excel, Find searches the formula text unless "Look in" asks for the values the cells
+    // show: the text a CONCATENATE formula makes is found only there (#4479). Replace always
+    // searches formulas, so the box is not shown on its tab.
+    let mut values = d.values.get("lookIn").and_then(Json::as_str) == Some("values");
+    if d.tab == "Find" {
+        ui.horizontal(|ui| {
+            let label = ui.label(lang.tr("Look in:"));
+            let shown = lang.tr(if values { "Values" } else { "Formulas" });
+            let r = craft_ui::ComboBox::from_id_salt("findLookIn").selected_text(shown).width(140.0).show_ui(ui, |ui| {
+                ui.selectable_value(&mut values, false, lang.tr("Formulas"));
+                ui.selectable_value(&mut values, true, lang.tr("Values"));
+            });
+            r.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, lang.tr("Look in:")));
+            r.response.labelled_by(label.id);
+        });
+    }
+    let look_in = if values { "values" } else { "formulas" };
     d.values.insert("what".into(), json!(what));
     d.values.insert("with".into(), json!(with));
     d.values.insert("matchCase".into(), json!(case));
     d.values.insert("wholeCell".into(), json!(whole));
     d.values.insert("within".into(), json!(if wb { "workbook" } else { "sheet" }));
+    d.values.insert("lookIn".into(), json!(look_in));
     // As in Excel, a selected range (more than one cell) limits the search on the sheet to it.
     // One selected cell, merged or not, searches the sheet, as in Excel.
     let range_selected = app.session.active().is_some_and(|doc| {
@@ -54,7 +73,7 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     } else {
         "sheet"
     };
-    let base = json!({"what": what, "matchCase": case, "wholeCell": whole, "within": within});
+    let base = json!({"what": what, "matchCase": case, "wholeCell": whole, "within": within, "lookIn": look_in});
     ui.horizontal(|ui| {
         if d.tab == "Replace" {
             if ui.button("Replace All").clicked() {
