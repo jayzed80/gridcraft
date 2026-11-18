@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use gridcraft_core::date::{serial_from_ymd, time_fraction};
+use gridcraft_core::date::{days_in_month_in, serial_from_ymd, time_fraction};
 use gridcraft_core::{CellError, CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_formula::Expr;
 use gridcraft_model::{
@@ -58,6 +58,10 @@ struct RowState {
     /// The cell being read lost its shared formula to a copy limit: its cached value is kept, even
     /// inside an array range (where a formula's cached values otherwise give way to the spill).
     shared_copy_refused: bool,
+    /// Typed dates (`t="d"`) whose day their month does not have, kept as the text the file
+    /// supplied, and the first such value for the warning.
+    invalid_dates: u64,
+    invalid_date_example: Option<String>,
     dropped: u64,
     rows: u64,
 }
@@ -187,6 +191,20 @@ fn read_sheet_format(e: &El, sheet: &mut Sheet) {
     }
 }
 
+/// What one sheet's cells kept or dropped rather than converted, said once per sheet.
+fn warn_cell_handling(cx: &mut Ctx<'_>, name: &str, st: &RowState) {
+    if st.dropped > 0 {
+        cx.warn(format!("sheet \"{name}\": {} cells or rows outside the 1,048,576 × 16,384 grid were dropped", st.dropped));
+    }
+    if st.invalid_dates > 0 {
+        let example = st.invalid_date_example.as_deref().unwrap_or_default();
+        cx.warn(format!(
+            "sheet \"{name}\": {} date cell(s) hold a date that does not exist (such as {example}); their text was kept",
+            st.invalid_dates
+        ));
+    }
+}
+
 /// Reads the sheet part `part`, with the VML shape numbers of the form controls read into the
 /// model (pass-through keeps the other controls).
 pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, crate::controls::ReadControls), IoError> {
@@ -203,9 +221,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
             El::default()
         }
     };
-    if st.dropped > 0 {
-        cx.warn(format!("sheet \"{name}\": {} cells or rows outside the 1,048,576 × 16,384 grid were dropped", st.dropped));
-    }
+    warn_cell_handling(cx, name, &st);
     settle_python_spills_past_budget(&st, &mut sheet);
     drop(bytes);
 
@@ -591,16 +607,23 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
         }
         "b" => v.map(|v| Value::Bool(matches!(v.trim(), "1" | "true" | "TRUE"))).unwrap_or(Value::Empty),
         "e" => v.map(|v| Value::Error(CellError::parse(v.trim()).unwrap_or(CellError::Value))).unwrap_or(Value::Empty),
-        "d" => match v.and_then(|v| parse_iso_datetime(v.trim(), cx.date_system)) {
-            Some(n) => Value::number(n),
-            None => {
-                if let Some(v) = v
-                    && !v.trim().is_empty()
-                {
-                    cx.warn("some date cells could not be read");
+        "d" => match v.map(str::trim).filter(|v| !v.is_empty()) {
+            Some(text) => match parse_iso(text, cx.date_system) {
+                Iso::Serial(n) => Value::number(n),
+                // A day the month does not have (29 February 2023, 31 April 2024) is not a date.
+                // Rolling it into the next month would silently change the supplied value, so
+                // the text is kept and the sheet's warning says so (#4456).
+                Iso::NotACalendarDate => {
+                    st.invalid_dates = st.invalid_dates.saturating_add(1);
+                    st.invalid_date_example.get_or_insert_with(|| text.to_string());
+                    Value::text(text)
                 }
-                Value::Empty
-            }
+                Iso::Unreadable => {
+                    cx.warn("some date cells could not be read");
+                    Value::Empty
+                }
+            },
+            None => Value::Empty,
         },
         _ => match v.map(str::trim).filter(|v| !v.is_empty()) {
             Some(t) => match t.parse::<f64>() {
@@ -776,8 +799,27 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
     }
 }
 
+/// What a typed date (`t="d"`) holds.
+enum Iso {
+    /// Its serial number.
+    Serial(f64),
+    /// A well-formed ISO date whose day its month does not have: 29 February 2023, 31 April 2024.
+    NotACalendarDate,
+    /// Not an ISO date or time at all, or outside the serial range.
+    Unreadable,
+}
+
 /// `2024-03-15`, `2024-03-15T10:30:00Z`, `10:30:00` → serial.
 pub fn parse_iso_datetime(s: &str, sys: DateSystem) -> Option<f64> {
+    match parse_iso(s, sys) {
+        Iso::Serial(n) => Some(n),
+        Iso::NotACalendarDate | Iso::Unreadable => None,
+    }
+}
+
+/// Like [`parse_iso_datetime`], but tells a day its month does not have apart from a value that
+/// is no date at all, so the reader can keep the supplied text and say why (#4456).
+fn parse_iso(s: &str, sys: DateSystem) -> Iso {
     let s = s.trim_end_matches('Z');
     let (date, time) = match s.split_once('T') {
         Some((d, t)) => (d, Some(t)),
@@ -787,27 +829,49 @@ pub fn parse_iso_datetime(s: &str, sys: DateSystem) -> Option<f64> {
     let mut serial = 0.0;
     if !date.is_empty() {
         let mut it = date.split('-');
-        let y: i64 = it.next()?.parse().ok()?;
-        let m: i64 = it.next()?.parse().ok()?;
-        let d: i64 = it.next()?.parse().ok()?;
+        let (Some(y), Some(m), Some(d)) = (
+            it.next().and_then(|v| v.parse::<i64>().ok()),
+            it.next().and_then(|v| v.parse::<i64>().ok()),
+            it.next().and_then(|v| v.parse::<i64>().ok()),
+        ) else {
+            return Iso::Unreadable;
+        };
         if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
-            return None;
+            return Iso::Unreadable;
         }
-        serial = serial_from_ymd(sys, y, m, d)?;
+        let Some(n) = serial_from_ymd(sys, y, m, d) else {
+            return Iso::Unreadable;
+        };
+        serial = n;
+        // `serial_from_ymd` rolls a day its month does not have into the next month, as DATE()
+        // does for typed input. A typed date is not typed input: the day must exist, or the
+        // value is no date at all. The year follows `serial_from_ymd`'s DATE() rule (years
+        // 0–1899 count from 1900), so the calendar checked is the one the serial is in.
+        let year = if (0..1900).contains(&y) { y + 1900 } else { y };
+        let (Some(year), Some(month), Some(day)) = (i32::try_from(year).ok(), u32::try_from(m).ok(), u32::try_from(d).ok()) else {
+            return Iso::Unreadable;
+        };
+        if day > days_in_month_in(sys, year, month) {
+            return Iso::NotACalendarDate;
+        }
     }
     if let Some(t) = time {
         // Drop a time-zone offset.
         let t = t.split(['+']).next().unwrap_or(t);
         let mut it = t.split(':');
-        let h: f64 = it.next()?.parse().ok()?;
-        let mi: f64 = it.next().unwrap_or("0").parse().ok()?;
-        let se: f64 = it.next().unwrap_or("0").parse().ok()?;
+        let (Some(h), Some(mi), Some(se)) = (
+            it.next().and_then(|v| v.parse::<f64>().ok()),
+            it.next().unwrap_or("0").parse::<f64>().ok(),
+            it.next().unwrap_or("0").parse::<f64>().ok(),
+        ) else {
+            return Iso::Unreadable;
+        };
         if !(0.0..24.0).contains(&h) || !(0.0..60.0).contains(&mi) || !(0.0..61.0).contains(&se) {
-            return None;
+            return Iso::Unreadable;
         }
         serial += time_fraction(h, mi, se);
     }
-    Some(serial)
+    Iso::Serial(serial)
 }
 
 /// What one dependent of a shared formula costs: its printed text plus its expression tree.
@@ -931,6 +995,22 @@ mod tests {
         assert_eq!(parse_iso_datetime("06:00:00", DateSystem::D1900), Some(0.25));
         assert_eq!(parse_iso_datetime("garbage", DateSystem::D1900), None);
         assert_eq!(parse_iso_datetime("2024-13-01", DateSystem::D1900), None);
+    }
+
+    /// #4456: a day its month does not have is not rolled into the next month.
+    #[test]
+    fn typed_dates_that_do_not_exist_are_told_apart() {
+        assert!(matches!(parse_iso("2023-02-29", DateSystem::D1900), Iso::NotACalendarDate));
+        assert!(matches!(parse_iso("2024-04-31", DateSystem::D1900), Iso::NotACalendarDate));
+        assert!(matches!(parse_iso("2023-02-29T10:30:00", DateSystem::D1900), Iso::NotACalendarDate));
+        // Real dates keep their serials, including the leap day and the day 29 February 2023
+        // would have rolled into.
+        assert_eq!(parse_iso_datetime("2024-02-29", DateSystem::D1900), Some(45_351.0));
+        assert_eq!(parse_iso_datetime("2023-03-01", DateSystem::D1900), Some(44_986.0));
+        // The 1900 system's own calendar has the fictitious 29 February 1900 (serial 60); the
+        // 1904 system does not.
+        assert_eq!(parse_iso_datetime("1900-02-29", DateSystem::D1900), Some(60.0));
+        assert!(matches!(parse_iso("1900-02-29", DateSystem::D1904), Iso::Unreadable));
     }
 
     fn ctx(pkg: crate::package::Package<'_>) -> Ctx<'_> {
